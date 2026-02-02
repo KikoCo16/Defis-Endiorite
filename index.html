@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Défis Casino Endiorite</title>
+<style>
+* { box-sizing: border-box; }
+body {
+  margin:0;
+  min-height:100vh;
+  background: radial-gradient(circle at top,#0f172a,#020617);
+  font-family: system-ui,-apple-system,Arial,sans-serif;
+  color:#f0f9ff;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  padding:20px;
+}
+.card {
+  width:100%;
+  max-width:420px;
+  background:#0b1120;
+  border-radius:16px;
+  padding:24px;
+  border:1px solid #1e3a8a;
+  box-shadow:0 10px 40px rgba(0,0,0,0.8),0 0 20px rgba(30,58,138,0.2);
+}
+h1,h2,h3{text-align:center;margin:12px 0;line-height:1.2;color:#60a5fa;}
+h1{font-size:1.8rem;}
+input{width:100%;padding:14px;margin:8px 0;border-radius:10px;border:1px solid #1e293b;background:#020617;color:#bfdbfe;font-size:16px;outline:none;}
+input:focus{border-color:#3b82f6;box-shadow:0 0 8px rgba(59,130,246,0.3);}
+button, .game-btn{width:100%;padding:14px;margin-top:10px;border:none;border-radius:10px;background:linear-gradient(135deg,#3b82f6,#1d4ed8);color:#fff;font-weight:700;font-size:16px;text-decoration:none;display:block;text-align:center;cursor:pointer;transition:opacity 0.2s,transform 0.1s,box-shadow 0.2s;}
+button:active, .game-btn:active{transform:scale(0.98);}
+.secondary{background:#1e293b;color:#94a3b8;border:1px solid #334155;}
+.secondary:hover{background:#334155;}
+.msg{font-size:14px;min-height:20px;color:#7dd3fc;text-align:center;margin:10px 0;}
+.hidden{display:none;}
+.credit-box{text-align:center;font-size:24px;font-weight:bold;margin:15px 0;color:#3b82f6;text-shadow:0 0 10px rgba(59,130,246,0.4);}
+.section{margin-top:20px;padding-top:15px;border-top:1px solid #1e293b;}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:15px;}
+.cell{width:60px;height:60px;background:#1e293b;display:flex;align-items:center;justify-content:center;font-size:32px;color:#fff;cursor:pointer;border-radius:8px;}
+.cell.disabled{cursor:not-allowed;background:#334155;}
+#modal{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);display:flex;justify-content:center;align-items:center;z-index:100;}
+#modalContent{background:#0b1120;padding:20px;border-radius:12px;text-align:center;}
+</style>
+</head>
+<body>
+
+<div class="card">
+
+<h1>🎮 Défis Morpion</h1>
+<div class="credit-box">💰 <span id="credits">0</span> crédits</div>
+
+<div class="section">
+  <h3>Créer un défi</h3>
+  <input id="betInput" type="number" placeholder="Mise">
+  <button id="createBtn">Créer le défi</button>
+  <div class="msg" id="createMsg"></div>
+</div>
+
+<div class="section">
+  <h3>Défis disponibles</h3>
+  <div id="challengesList"></div>
+</div>
+
+<!-- Modal attente -->
+<div id="modal" class="hidden">
+  <div id="modalContent">
+    <h3 id="modalText">En attente d'acceptation...</h3>
+    <button id="cancelBtn" class="secondary">Annuler</button>
+  </div>
+</div>
+
+<!-- Jeu -->
+<div id="gameZone" class="hidden">
+  <h3 id="turnMsg"></h3>
+  <div class="grid" id="grid"></div>
+  <div class="msg" id="resultMsg"></div>
+  <button id="forfeitBtn" class="secondary">🏳️ Déclarer forfait</button>
+</div>
+
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
+import { getDatabase, ref, get, set, update, onValue, push } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDAQALLN99kqiYY4UZz9wl2stedP5KQ5mA",
+  authDomain: "casino-b23c9.firebaseapp.com",
+  databaseURL: "https://casino-b23c9-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "casino-b23c9",
+  storageBucket: "casino-b23c9.appspot.com",
+  messagingSenderId: "139229793155",
+  appId: "1:139229793155:web:953b31b383a87bc3c504b6"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+// --- Utilisateur ---
+let user = localStorage.getItem("casinoUser");
+if(!user){ user = prompt("Entrez votre pseudo"); localStorage.setItem("casinoUser", user); }
+
+const creditsEl = document.getElementById("credits");
+const betInput = document.getElementById("betInput");
+const createBtn = document.getElementById("createBtn");
+const createMsg = document.getElementById("createMsg");
+const challengesList = document.getElementById("challengesList");
+const modal = document.getElementById("modal");
+const modalText = document.getElementById("modalText");
+const cancelBtn = document.getElementById("cancelBtn");
+
+const gameZone = document.getElementById("gameZone");
+const gridEl = document.getElementById("grid");
+const turnMsg = document.getElementById("turnMsg");
+const resultMsg = document.getElementById("resultMsg");
+const forfeitBtn = document.getElementById("forfeitBtn");
+
+let challengeId = null;
+let gameData = null;
+
+// --- Crédit initial ---
+async function refreshCredits(){
+  const snap = await get(ref(db,"users/"+user));
+  if(!snap.exists()) await set(ref(db,"users/"+user), {credits:1000,balance:1000,password:""});
+  creditsEl.textContent = (await get(ref(db,"users/"+user))).val().credits;
+}
+refreshCredits();
+
+// --- Créer un défi ---
+createBtn.onclick = async () => {
+  const bet = Number(betInput.value);
+  const snap = await get(ref(db,"users/"+user));
+  if(bet<=0 || bet > snap.val().credits) return createMsg.textContent="Pas assez de crédits";
+  
+  const newChallenge = {
+    creator:user,
+    opponent:"",
+    bet:bet,
+    status:"open",
+    board:Array(9).fill(""),
+    turn:user,
+    winner:""
+  };
+  const chRef = push(ref(db,"challenges"));
+  await set(chRef,newChallenge);
+  challengeId = chRef.key;
+  showModal("En attente d'acceptation...");
+};
+
+// --- Modal ---
+function showModal(text){ modalText.textContent=text; modal.classList.remove("hidden"); }
+function hideModal(){ modal.classList.add("hidden"); }
+cancelBtn.onclick = async () => {
+  if (!challengeId) return;
+  // On passe le statut à cancelled
+  await update(ref(db, "challenges/" + challengeId), { status: "cancelled" });
+  
+  // IMPORTANT : On vide localement l'ID pour arrêter la boucle de surveillance
+  challengeId = null; 
+  hideModal();
+  location.reload(); // Optionnel : force le rafraîchissement pour nettoyer l'état
+};
+
+
+// --- Afficher défis disponibles ---
+onValue(ref(db,"challenges"), snapshot=>{
+  challengesList.innerHTML="";
+  snapshot.forEach(ch=>{
+    const c = ch.val();
+    if(c.status==="open" && c.creator!==user){
+      const btn = document.createElement("button");
+      btn.textContent=`${c.creator} - Mise: ${c.bet}`;
+      btn.onclick = async ()=>{
+        const uSnap = await get(ref(db,"users/"+user));
+        if(uSnap.val().credits<c.bet){ alert("Pas assez de crédits pour accepter"); return; }
+        await update(ref(db,"challenges/"+ch.key), {opponent:user,status:"started"});
+        challengeId = ch.key;
+      };
+      challengesList.appendChild(btn);
+    }
+  });
+});
+
+// --- Surveille le défi en cours ---
+onValue(ref(db, "challenges"), async snapshot => {
+  let foundActiveChallenge = false;
+
+  snapshot.forEach(ch => {
+    const c = ch.val();
+    // On ne s'occupe que des défis qui ne sont pas finis ou annulés
+    if ((c.creator === user || c.opponent === user) && (c.status === "open" || c.status === "started")) {
+      challengeId = ch.key;
+      gameData = c;
+      foundActiveChallenge = true;
+    }
+  });
+
+  if (!foundActiveChallenge) {
+    challengeId = null;
+    hideModal();
+    gameZone.classList.add("hidden");
+    return;
+  }
+
+  // ... reste du code pour afficher le jeu ou la modale
+  if (gameData.status === "started") {
+    hideModal();
+    gameZone.classList.remove("hidden");
+    render(gameData);
+  } else if (gameData.status === "open" && gameData.creator === user) {
+    showModal("En attente d'acceptation...");
+  }
+});
+
+
+// --- Rendu du jeu ---
+function render(data){
+  turnMsg.textContent = data.turn===user?"Votre tour":"Tour de "+(data.turn===data.creator?data.creator:data.opponent);
+  resultMsg.textContent = data.winner?`Victoire de ${data.winner} !`:"";
+  gridEl.innerHTML="";
+  data.board.forEach((cell,i)=>{
+    const div = document.createElement("div");
+    div.className="cell";
+    if(data.turn!==user || data.winner) div.classList.add("disabled");
+    div.textContent = cell;
+    div.onclick = ()=>makeMove(i);
+    gridEl.appendChild(div);
+  });
+}
+
+// --- Jouer ---
+async function makeMove(idx){
+  if(!gameData || gameData.board[idx] || gameData.turn!==user || gameData.winner) return;
+  gameData.board[idx] = (user===gameData.creator)?"X":"O"; 
+  gameData.turn = (gameData.turn===gameData.creator)?gameData.opponent:gameData.creator;
+  const winner = checkWinner(gameData.board);
+  if(winner){
+    gameData.status="finished";
+    gameData.winner=winner==="Vous"?user:gameData.turn==="X"?gameData.creator:gameData.opponent;
+    await update(ref(db,"challenges/"+challengeId), gameData);
+    await giveCredits(gameData.winner,gameData.bet);
+    setTimeout(resetChallenge,3000);
+    return;
+  }
+  await update(ref(db,"challenges/"+challengeId), gameData);
+}
+
+// --- Vérifie victoire ---
+function checkWinner(b){
+  const lines = [
+    [0,1,2],[3,4,5],[6,7,8],
+    [0,3,6],[1,4,7],[2,5,8],
+    [0,4,8],[2,4,6]
+  ];
+  for(const l of lines){
+    if(b[l[0]] && b[l[0]]===b[l[1]] && b[l[1]]===b[l[2]]) return b[l[0]]===((user===gameData.creator)?"X":"O")?"Vous":"Adversaire";
+  }
+  return b.includes("")? null : "Égalité";
+}
+
+// --- Donne crédits ---
+async function giveCredits(winner,bet){
+  const winnerSnap = await get(ref(db,"users/"+winner));
+  await update(ref(db,"users/"+winner),{
+    credits:winnerSnap.val().credits+bet*2,
+    balance:winnerSnap.val().balance+bet*2,
+    password:winnerSnap.val().password
+  });
+  refreshCredits();
+}
+
+// --- Déclarer forfait ---
+forfeitBtn.onclick = async ()=>{
+  if(!gameData || gameData.status==="finished") return;
+  const loser = user;
+  const winner = (user===gameData.creator)?gameData.opponent:gameData.creator;
+  gameData.status="finished";
+  gameData.winner=winner;
+  await update(ref(db,"challenges/"+challengeId), gameData);
+  await giveCredits(winner,gameData.bet);
+  setTimeout(resetChallenge,3000);
+};
+
+// --- Reset ---
+async function resetChallenge(){
+  await update(ref(db,"challenges/"+challengeId), {status:"finished"});
+  challengeId = null;
+  gameZone.classList.add("hidden");
+  resultMsg.textContent="";
+  gridEl.innerHTML="";
+  hideModal();
+}
+</script>
+
+</body>
+</html>
