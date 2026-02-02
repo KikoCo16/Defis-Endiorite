@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Défis Casino Endiorite</title>
+
+<style>
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(circle at top, #0f172a, #020617);
+  font-family: system-ui, Arial;
+  color: #e5e7eb;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.card {
+  width: 100%;
+  max-width: 420px;
+  background: #0b1120;
+  border-radius: 16px;
+  padding: 20px;
+  border: 1px solid #1e3a8a;
+}
+
+h2, h3 {
+  text-align: center;
+  color: #60a5fa;
+}
+
+input, select, button {
+  width: 100%;
+  padding: 12px;
+  margin-top: 8px;
+  border-radius: 10px;
+  border: none;
+  background: #020617;
+  color: #bfdbfe;
+}
+
+button {
+  background: linear-gradient(135deg,#3b82f6,#1d4ed8);
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.secondary {
+  background: #1e293b;
+}
+
+.msg {
+  text-align: center;
+  font-size: 14px;
+  margin-top: 8px;
+  min-height: 20px;
+}
+
+.hidden { display:none }
+
+/* MORPION */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-top: 15px;
+}
+
+.cell {
+  aspect-ratio: 1;
+  background: #020617;
+  font-size: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+</style>
+</head>
+
+<body>
+<div class="card">
+
+<h2>⚔️ Défis publics</h2>
+
+<div id="createZone">
+  <h3>Créer un défi</h3>
+  <input id="bet" type="number" placeholder="Mise (max 200)">
+  <button onclick="createChallenge()">Créer</button>
+  <div class="msg" id="createMsg"></div>
+</div>
+
+<div id="waitingZone" class="hidden">
+  <h3>⏳ En attente d’un adversaire</h3>
+  <button class="secondary" onclick="cancelChallenge()">Annuler</button>
+</div>
+
+<div id="listZone">
+  <h3>Défis disponibles</h3>
+  <div id="challengeList"></div>
+</div>
+
+<div id="gameZone" class="hidden">
+  <h3 id="gameTitle"></h3>
+  <div class="grid" id="grid"></div>
+  <div class="msg" id="gameMsg"></div>
+</div>
+
+<a href="https://kikoco16.github.io/Casino-Endiorite/" class="secondary" style="margin-top:12px;display:block;text-align:center;padding:10px;border-radius:10px;">⬅ Retour</a>
+
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
+import { getDatabase, ref, get, set, update, remove, onValue } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDAQALLN99kqiYY4UZz9wl2stedP5KQ5mA",
+  authDomain: "casino-b23c9.firebaseapp.com",
+  databaseURL: "https://casino-b23c9-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "casino-b23c9",
+  storageBucket: "casino-b23c9.firebasestorage.app",
+  messagingSenderId: "139229793155",
+  appId: "1:139229793155:web:953b31b383a87bc3c504b6"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+const currentUser = localStorage.getItem("casinoUser");
+if (!currentUser) location.href = "/";
+
+let myChallengeId = null;
+let currentGame = null;
+
+/* ---------------- CREATE ---------------- */
+
+async function createChallenge() {
+  const bet = Number(betInput.value);
+  if (bet <= 0 || bet > 200) return createMsg.textContent = "Mise invalide";
+
+  const all = await get(ref(db,"challenges"));
+  if (all.exists() && Object.keys(all.val()).length >= 2)
+    return createMsg.textContent = "Limite de défis atteinte";
+
+  const userSnap = await get(ref(db,"users/"+currentUser));
+  if (userSnap.val().credits < bet)
+    return createMsg.textContent = "Crédits insuffisants";
+
+  await update(ref(db,"users/"+currentUser),{
+    credits:userSnap.val().credits-bet,
+    balance:userSnap.val().balance-bet,
+    password:userSnap.val().password
+  });
+
+  const id = Date.now();
+  await set(ref(db,"challenges/"+id),{
+    creator:currentUser,
+    bet,
+    status:"open",
+    board:Array(9).fill(""),
+    turn:currentUser
+  });
+
+  myChallengeId = id;
+  createZone.classList.add("hidden");
+  waitingZone.classList.remove("hidden");
+}
+
+/* ---------------- CANCEL ---------------- */
+
+async function cancelChallenge(){
+  const snap = await get(ref(db,"challenges/"+myChallengeId));
+  if (!snap.exists()) return;
+
+  const bet = snap.val().bet;
+  const u = await get(ref(db,"users/"+currentUser));
+
+  await update(ref(db,"users/"+currentUser),{
+    credits:u.val().credits+bet,
+    balance:u.val().balance+bet,
+    password:u.val().password
+  });
+
+  await remove(ref(db,"challenges/"+myChallengeId));
+  location.reload();
+}
+
+/* ---------------- LIST ---------------- */
+
+onValue(ref(db,"challenges"), snap=>{
+  challengeList.innerHTML = "";
+  if (!snap.exists()) return;
+
+  snap.forEach(c=>{
+    const d = c.val();
+    if (d.status !== "open" || d.creator === currentUser) return;
+
+    const b = document.createElement("button");
+    b.textContent = `${d.creator} – ${d.bet} crédits`;
+    b.onclick = ()=>acceptChallenge(c.key);
+    challengeList.appendChild(b);
+  });
+});
+
+/* ---------------- ACCEPT ---------------- */
+
+async function acceptChallenge(id){
+  const cRef = ref(db,"challenges/"+id);
+  const snap = await get(cRef);
+  const bet = snap.val().bet;
+
+  const u = await get(ref(db,"users/"+currentUser));
+  if (u.val().credits < bet) return alert("Crédits insuffisants");
+
+  await update(ref(db,"users/"+currentUser),{
+    credits:u.val().credits-bet,
+    balance:u.val().balance-bet,
+    password:u.val().password
+  });
+
+  await update(cRef,{
+    status:"started",
+    opponent:currentUser
+  });
+
+  startGame(id);
+}
+
+/* ---------------- GAME ---------------- */
+
+function startGame(id){
+  currentGame = id;
+  listZone.classList.add("hidden");
+  gameZone.classList.remove("hidden");
+
+  onValue(ref(db,"challenges/"+id), snap=>{
+    const d = snap.val();
+    renderBoard(d);
+  });
+}
+
+function renderBoard(d){
+  grid.innerHTML = "";
+  gameTitle.textContent = `Morpion – ${d.creator} vs ${d.opponent}`;
+  d.board.forEach((v,i)=>{
+    const c = document.createElement("div");
+    c.className="cell";
+    c.textContent=v;
+    c.onclick=()=>play(i,d);
+    grid.appendChild(c);
+  });
+}
+
+async function play(i,d){
+  if (d.board[i]) return;
+  if (d.turn !== currentUser) return;
+
+  const symbol = d.creator===currentUser ? "X" : "O";
+  d.board[i]=symbol;
+
+  await update(ref(db,"challenges/"+currentGame),{
+    board:d.board,
+    turn: d.turn===d.creator ? d.opponent : d.creator
+  });
+}
+</script>
+</body>
+</html>
